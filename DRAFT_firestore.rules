@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Validation Blueprints
+    function isValidUser(data) {
+      return data.keys().hasAll(['userId', 'name']) &&
+             data.keys().size() <= 10 &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() < 200 &&
+             (!('school' in data) || (data.school is string && data.school.size() < 200));
+    }
+
+    function isValidModul(data) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'subject', 'grade', 'curriculum', 'createdAt', 'content']) &&
+             data.keys().size() == 8 &&
+             data.userId == request.auth.uid &&
+             data.id is string && data.id.size() < 128 &&
+             data.title is string && data.title.size() < 500 &&
+             data.subject is string && data.subject.size() < 200 &&
+             data.grade is string && data.grade.size() < 50 &&
+             data.curriculum is string && data.curriculum.size() < 100 &&
+             data.content is string && data.content.size() < 1000000 &&
+             data.createdAt == request.time;
+    }
+
+    // Phase 4: Match Blocks
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().userId == existing().userId &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'school', 'updatedAt']);
+    }
+
+    match /documents/{documentId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isSignedIn() && 
+                    isValidId(documentId) && 
+                    isValidModul(incoming()) && 
+                    incoming().userId == request.auth.uid;
+                    
+      allow update: if isSignedIn() && 
+                    resource.data.userId == request.auth.uid &&
+                    isValidModul(incoming()) &&
+                    incoming().userId == existing().userId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().id == existing().id &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subject', 'grade', 'content']);
+                    
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
